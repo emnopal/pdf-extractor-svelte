@@ -1,16 +1,20 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import Papa from 'papaparse';
-	
-	let pdfjsLib: any;
+  import type * as PDFJS from 'pdfjs-dist';
+  import { getAllTextInsidePDF } from '../lib/utils/extractor/all';
+  import { downloadTextAsFile } from '../lib/utils/converter/txt';
+	import { getTableFromPDF } from '../lib/utils/extractor/table'
+	import { downloadTextAsCsv } from '../lib/utils/converter/csv'
+
+	let pdfjsLib: typeof PDFJS | null = null;
 	let fileInput: HTMLInputElement;
 	let pdfFile: File | null = $state(null);
 	let showModal = $state(false);
 	let pdfDataUrl: string | null = $state(null);
 	let isProcessing = $state(false);
 	let errorMessage: string | null = $state(null);
-	
-	// Load PDF.js only on the client side
+
 	onMount(async () => {
 		pdfjsLib = await import('pdfjs-dist');
 		pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
@@ -45,72 +49,69 @@
 			fileInput.value = '';
 		}
 	}
-	
-	async function extractTablesAndConvertToCsv() {
+
+  async function getTextAndConvertToTxt() {
 		if (!pdfFile || !pdfjsLib) return;
 		
 		isProcessing = true;
 		errorMessage = null;
 		
 		try {
-			const arrayBuffer = await pdfFile.arrayBuffer();
-			const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-			
-			const allTableData: string[][] = [];
-			
-			// Extract text from all pages
-			for (let i = 1; i <= pdf.numPages; i++) {
-				const page = await pdf.getPage(i);
-				const textContent = await page.getTextContent();
-				
-				// Simple heuristic: group text items into rows based on Y position
-				const lines: Map<number, string[]> = new Map();
-				
-				textContent.items.forEach((item: any) => {
-					if (item.str && item.str.trim()) {
-						const y = Math.round(item.transform[5]);
-						if (!lines.has(y)) {
-							lines.set(y, []);
-						}
-						lines.get(y)!.push(item.str.trim());
-					}
-				});
-				
-				// Convert lines to rows
-				const sortedY = Array.from(lines.keys()).sort((a, b) => b - a);
-				sortedY.forEach(y => {
-					const rowData = lines.get(y)!;
-					if (rowData.length > 1) { // Consider it a table row if it has multiple columns
-						allTableData.push(rowData);
-					}
-				});
-			}
-			
-			// Convert to CSV
-			if (allTableData.length > 0) {
-				const csv = Papa.unparse(allTableData);
-				
-				// Download CSV
-				const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-				const link = document.createElement('a');
-				const url = URL.createObjectURL(blob);
-				link.setAttribute('href', url);
-				link.setAttribute('download', `${pdfFile.name.replace('.pdf', '')}_tables.csv`);
-				link.style.visibility = 'hidden';
-				document.body.appendChild(link);
-				link.click();
-				document.body.removeChild(link);
-				URL.revokeObjectURL(url);
+			const textContents = await getAllTextInsidePDF(pdfjsLib, pdfFile);
+			if (textContents) {
+				downloadTextAsFile(textContents, `${pdfFile.name.replace('.pdf', '')}.txt`);
 			} else {
-				errorMessage = 'No table data found in the PDF';
+				errorMessage = 'No text content found in the PDF';
 			}
 		} catch (error) {
 			console.error('Error processing PDF:', error);
-			errorMessage = 'Failed to extract tables from PDF';
+			errorMessage = 'Failed to extract text from PDF';
 		} finally {
 			isProcessing = false;
 		}
 	}
+
+  async function extractTablesAndConvertToText() {
+    if (!pdfFile || !pdfjsLib) return;
+		
+		isProcessing = true;
+		errorMessage = null;
+		
+		try {
+			const textContents = await getTableFromPDF(pdfjsLib, pdfFile);
+			if (textContents) {
+				downloadTextAsFile(textContents, `${pdfFile.name.replace('.pdf', '')}.txt`);
+			} else {
+				errorMessage = 'No text content found in the PDF';
+			}
+		} catch (error) {
+			console.error('Error processing PDF:', error);
+			errorMessage = 'Failed to extract text from PDF';
+		} finally {
+			isProcessing = false;
+		}
+  }
+
+  async function extractTablesAndConvertToCsv() {
+    if (!pdfFile || !pdfjsLib) return;
+		
+		isProcessing = true;
+		errorMessage = null;
+		
+		try {
+			const textContents = await getTableFromPDF(pdfjsLib, pdfFile);
+			if (textContents) {
+				downloadTextAsCsv(textContents, `${pdfFile.name.replace('.pdf', '')}.csv`);
+			} else {
+				errorMessage = 'No text content found in the PDF';
+			}
+		} catch (error) {
+			console.error('Error processing PDF:', error);
+			errorMessage = 'Failed to extract text from PDF';
+		} finally {
+			isProcessing = false;
+		}
+  }
 </script>
 
 <div class="min-h-screen bg-gray-100 flex items-center justify-center p-4">
@@ -186,12 +187,26 @@
 				>
 					Close
 				</button>
-				<button
+        <button
+					onclick={getTextAndConvertToTxt}
+					disabled={isProcessing}
+					class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:bg-blue-400 disabled:cursor-not-allowed"
+				>
+					{isProcessing ? 'Processing...' : 'Extract to .txt (all)'}
+				</button>
+        <!-- <button
+					onclick={extractTablesAndConvertToText}
+					disabled={isProcessing}
+					class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:bg-blue-400 disabled:cursor-not-allowed"
+				>
+					{isProcessing ? 'Processing...' : 'Extract to .txt (only tables)'}
+				</button> -->
+        <button
 					onclick={extractTablesAndConvertToCsv}
 					disabled={isProcessing}
 					class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors disabled:bg-blue-400 disabled:cursor-not-allowed"
 				>
-					{isProcessing ? 'Processing...' : 'Convert to CSV'}
+					{isProcessing ? 'Processing...' : 'Extract to .csv (only tables)'}
 				</button>
 			</div>
 		</div>
